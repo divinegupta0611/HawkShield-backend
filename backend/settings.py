@@ -136,5 +136,6 @@ CAMERA_COLLECTION = MONGO_DB["cameras"]
 
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
+    "https://hawk-shield-frontend.vercel.app"
 ]
 CORS_ALLOW_ALL_ORIGINS = True
