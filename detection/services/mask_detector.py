@@ -13,20 +13,23 @@ def detect_mask(image_path: str):
 
     try:
         with open(image_path, "rb") as img:
-            response = requests.post(API_URL, files={"file": img}, timeout=10)
+            response = requests.post(API_URL, files={"file": img}, timeout=15)
         
         if response.status_code != 200:
-            print(f"Mask detection API error: {response.status_code} - {response.text}")
+            print(f"❌ Mask detection API error: {response.status_code} - {response.text[:200]}")
             return {"error": f"API returned status {response.status_code}", "predictions": []}
         
         result = response.json()
         
         # Log the response for debugging
+        print(f"📦 Mask API Response Keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}")
         if "predictions" in result:
-            print(f"Mask detection found {len(result['predictions'])} predictions")
-            for pred in result['predictions']:
+            print(f"✅ Mask detection found {len(result['predictions'])} predictions")
+            for idx, pred in enumerate(result['predictions']):
                 if isinstance(pred, dict):
-                    print(f"  - Class: {pred.get('class', 'unknown')}, Confidence: {pred.get('confidence', 0)}")
+                    print(f"  [{idx}] Class: '{pred.get('class', 'unknown')}', Confidence: {pred.get('confidence', 0):.2f}")
+        else:
+            print(f"⚠️ No 'predictions' key in response. Full response: {str(result)[:300]}")
         
         return result
     except requests.exceptions.Timeout:
