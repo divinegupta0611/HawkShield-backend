@@ -159,3 +159,66 @@ def cleanup_inactive_cameras(request):
             return JsonResponse({"error": str(e)}, status=500)
     
     return JsonResponse({"error": "Invalid request method"}, status=405)
+
+
+@csrf_exempt
+def upload_frame(request, cam_id):
+    """Receive frame from streaming device and store it for viewing"""
+    if request.method == "POST":
+        try:
+            frame = request.FILES.get("frame")
+            if not frame:
+                return JsonResponse({"error": "Frame not provided"}, status=400)
+            
+            # Store frame in MongoDB as base64
+            import base64
+            
+            frame_data = frame.read()
+            frame_base64 = base64.b64encode(frame_data).decode('utf-8')
+            
+            frames_collection = settings.FRAMES_COLLECTION
+            frames_collection.update_one(
+                {"cameraId": cam_id},
+                {
+                    "$set": {
+                        "cameraId": cam_id,
+                        "frame": frame_base64,
+                        "timestamp": datetime.utcnow().isoformat()
+                    }
+                },
+                upsert=True
+            )
+            
+            return JsonResponse({
+                "message": "Frame uploaded",
+                "cameraId": cam_id
+            }, status=200)
+            
+        except Exception as e:
+            print(f"Error uploading frame: {e}")
+            return JsonResponse({"error": str(e)}, status=500)
+    
+    return JsonResponse({"error": "Invalid request method"}, status=405)
+
+
+@csrf_exempt
+def get_frame(request, cam_id):
+    """Get latest frame for a camera"""
+    try:
+        frames_collection = settings.FRAMES_COLLECTION
+        frame_doc = frames_collection.find_one(
+            {"cameraId": cam_id},
+            sort=[("timestamp", -1)]
+        )
+        
+        if not frame_doc:
+            return JsonResponse({"error": "No frame available"}, status=404)
+        
+        return JsonResponse({
+            "cameraId": cam_id,
+            "frame": frame_doc.get("frame"),
+            "timestamp": frame_doc.get("timestamp")
+        }, status=200)
+        
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)

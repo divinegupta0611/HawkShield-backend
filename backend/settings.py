@@ -133,6 +133,8 @@ MONGO_URI = f"mongodb+srv://{username}:{password}@cameras.sqzabiw.mongodb.net/?a
 client = MongoClient(MONGO_URI)
 MONGO_DB = client["hawkshield"]
 CAMERA_COLLECTION = MONGO_DB["cameras"]
+LOGS_COLLECTION = MONGO_DB["logs"]
+FRAMES_COLLECTION = MONGO_DB["frames"]
 
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
