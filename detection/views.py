@@ -25,6 +25,26 @@ def detect_mask_api(request):
 
     try:
         result = detect_mask(tmp_path)
+        
+        # Filter mask predictions to only include actual masks
+        if isinstance(result, dict) and "predictions" in result:
+            all_preds = result["predictions"]
+            mask_preds = []
+            mask_class_names = ["mask", "with_mask", "face_mask", "masked", "wearing_mask"]
+            
+            for pred in all_preds:
+                if isinstance(pred, dict):
+                    pred_class = pred.get("class", "").lower() or pred.get("predicted_class", "").lower()
+                    if any(mask_name in pred_class for mask_name in mask_class_names):
+                        if not any(no_mask in pred_class for no_mask in ["no_mask", "without_mask", "no-mask", "without-mask"]):
+                            confidence = pred.get("confidence", 0) or pred.get("confidence_score", 0)
+                            if confidence > 0.5:
+                                mask_preds.append(pred)
+            
+            result["predictions"] = mask_preds
+            result["filtered_count"] = len(mask_preds)
+            result["original_count"] = len(all_preds)
+        
         return Response(result)
     except Exception as e:
         return Response({"error": str(e)}, status=500)
@@ -52,16 +72,40 @@ def detect_threats(request):
 
     try:
         # Run all detection models
+        print("Starting detection for all threat types...")
         knife_results = detect_knife(img_path)
         gun_results = detect_gun(img_path)
         mask_results = detect_mask(img_path)
         emotion_results = detect_emotion(img_path)
         
+        # Log mask detection results for debugging
+        if isinstance(mask_results, dict):
+            if "error" in mask_results:
+                print(f"Mask detection error: {mask_results['error']}")
+            elif "predictions" in mask_results:
+                print(f"Mask detection raw results: {len(mask_results['predictions'])} predictions found")
+        
         # Extract predictions safely
         knife_preds = knife_results.get("predictions", []) if isinstance(knife_results, dict) else []
         gun_preds = gun_results.get("predictions", []) if isinstance(gun_results, dict) else []
-        mask_preds = mask_results.get("predictions", []) if isinstance(mask_results, dict) else []
+        all_mask_preds = mask_results.get("predictions", []) if isinstance(mask_results, dict) else []
         emotion_preds = emotion_results.get("predictions", []) if isinstance(emotion_results, dict) else []
+        
+        # Filter mask predictions - only count actual mask detections (not "no mask" or "without_mask")
+        mask_preds = []
+        mask_class_names = ["mask", "with_mask", "face_mask", "masked", "wearing_mask"]
+        for pred in all_mask_preds:
+            if isinstance(pred, dict):
+                pred_class = pred.get("class", "").lower() or pred.get("predicted_class", "").lower()
+                # Check if it's an actual mask detection (not "no mask" or "without_mask")
+                if any(mask_name in pred_class for mask_name in mask_class_names):
+                    # Exclude "no mask" variations
+                    if not any(no_mask in pred_class for no_mask in ["no_mask", "without_mask", "no-mask", "without-mask"]):
+                        # Check confidence threshold (only count if confidence > 0.5)
+                        confidence = pred.get("confidence", 0) or pred.get("confidence_score", 0)
+                        if confidence > 0.5:
+                            mask_preds.append(pred)
+                            print(f"Mask detected: {pred_class} (confidence: {confidence})")
         
         # Check for angry emotions
         angry_emotions = []
@@ -70,6 +114,9 @@ def detect_threats(request):
                 pred_class = pred.get("class", "").lower() or pred.get("predicted_class", "").lower()
                 if any(angry_word in pred_class for angry_word in ["angry", "anger", "furious", "rage"]):
                     angry_emotions.append(pred)
+        
+        # Debug logging
+        print(f"Detection results - Knife: {len(knife_preds)}, Gun: {len(gun_preds)}, Mask: {len(mask_preds)}, Angry: {len(angry_emotions)}")
         
         # Determine if there's a threat
         has_threat = (
