@@ -30,20 +30,31 @@ def detect_mask_api(request):
         if isinstance(result, dict) and "predictions" in result:
             all_preds = result["predictions"]
             mask_preds = []
-            mask_class_names = ["mask", "with_mask", "face_mask", "masked", "wearing_mask"]
+            mask_class_names = ["mask", "with_mask", "face_mask", "masked", "wearing_mask", "with-mask", "face-mask"]
+            no_mask_class_names = ["no_mask", "without_mask", "no-mask", "without-mask", "no mask", "without mask"]
             
+            print(f"Mask API returned {len(all_preds)} predictions")
             for pred in all_preds:
                 if isinstance(pred, dict):
-                    pred_class = pred.get("class", "").lower() or pred.get("predicted_class", "").lower()
-                    if any(mask_name in pred_class for mask_name in mask_class_names):
-                        if not any(no_mask in pred_class for no_mask in ["no_mask", "without_mask", "no-mask", "without-mask"]):
-                            confidence = pred.get("confidence", 0) or pred.get("confidence_score", 0)
-                            if confidence > 0.5:
-                                mask_preds.append(pred)
+                    pred_class = pred.get("class", "").lower() or pred.get("predicted_class", "").lower() or ""
+                    confidence = float(pred.get("confidence", 0) or pred.get("confidence_score", 0) or 0)
+                    
+                    # Exclude "no mask" detections
+                    is_no_mask = any(no_mask in pred_class for no_mask in no_mask_class_names)
+                    if is_no_mask:
+                        continue
+                    
+                    # Check if it's a mask detection
+                    is_mask = any(mask_name in pred_class for mask_name in mask_class_names)
+                    if is_mask and confidence > 0.3:
+                        mask_preds.append(pred)
+                    elif confidence > 0.6 and pred_class:  # High confidence unknown class
+                        mask_preds.append(pred)
             
             result["predictions"] = mask_preds
             result["filtered_count"] = len(mask_preds)
             result["original_count"] = len(all_preds)
+            print(f"Filtered to {len(mask_preds)} mask detections")
         
         return Response(result)
     except Exception as e:
@@ -81,9 +92,20 @@ def detect_threats(request):
         # Log mask detection results for debugging
         if isinstance(mask_results, dict):
             if "error" in mask_results:
-                print(f"Mask detection error: {mask_results['error']}")
+                print(f"❌ Mask detection error: {mask_results['error']}")
             elif "predictions" in mask_results:
-                print(f"Mask detection raw results: {len(mask_results['predictions'])} predictions found")
+                print(f"✅ Mask detection raw results: {len(mask_results['predictions'])} predictions found")
+                # Print all predictions for debugging
+                for idx, pred in enumerate(mask_results.get("predictions", [])):
+                    if isinstance(pred, dict):
+                        pred_class = pred.get("class", "") or pred.get("predicted_class", "")
+                        confidence = pred.get("confidence", 0) or pred.get("confidence_score", 0)
+                        print(f"  Prediction {idx}: class='{pred_class}', confidence={confidence}")
+            else:
+                print(f"⚠️ Mask detection response structure: {list(mask_results.keys())}")
+                print(f"Full mask response (first 500 chars): {str(mask_results)[:500]}")
+        else:
+            print(f"⚠️ Mask detection returned non-dict: {type(mask_results)}")
         
         # Extract predictions safely
         knife_preds = knife_results.get("predictions", []) if isinstance(knife_results, dict) else []
@@ -93,19 +115,52 @@ def detect_threats(request):
         
         # Filter mask predictions - only count actual mask detections (not "no mask" or "without_mask")
         mask_preds = []
-        mask_class_names = ["mask", "with_mask", "face_mask", "masked", "wearing_mask"]
+        mask_class_names = ["mask", "with_mask", "face_mask", "masked", "wearing_mask", "with-mask", "face-mask", "mask_weared_incorrect"]
+        no_mask_class_names = ["no_mask", "without_mask", "no-mask", "without-mask", "no mask", "without mask", "without_mask_incorrect"]
+        
+        print(f"Processing {len(all_mask_preds)} mask predictions...")
         for pred in all_mask_preds:
             if isinstance(pred, dict):
-                pred_class = pred.get("class", "").lower() or pred.get("predicted_class", "").lower()
-                # Check if it's an actual mask detection (not "no mask" or "without_mask")
-                if any(mask_name in pred_class for mask_name in mask_class_names):
-                    # Exclude "no mask" variations
-                    if not any(no_mask in pred_class for no_mask in ["no_mask", "without_mask", "no-mask", "without-mask"]):
-                        # Check confidence threshold (only count if confidence > 0.5)
-                        confidence = pred.get("confidence", 0) or pred.get("confidence_score", 0)
-                        if confidence > 0.5:
-                            mask_preds.append(pred)
-                            print(f"Mask detected: {pred_class} (confidence: {confidence})")
+                pred_class = pred.get("class", "").lower() or pred.get("predicted_class", "").lower() or ""
+                confidence = float(pred.get("confidence", 0) or pred.get("confidence_score", 0) or 0)
+                
+                print(f"  Checking prediction: class='{pred_class}', confidence={confidence}")
+                
+                # Check if it's a "no mask" detection - exclude these
+                is_no_mask = any(no_mask in pred_class for no_mask in no_mask_class_names)
+                if is_no_mask:
+                    print(f"    -> Excluded (no mask detection)")
+                    continue
+                
+                # Check if it's an actual mask detection
+                is_mask = any(mask_name in pred_class for mask_name in mask_class_names)
+                if is_mask:
+                    # Very low confidence threshold to catch more detections (0.2)
+                    if confidence > 0.2:
+                        mask_preds.append(pred)
+                        print(f"    -> ✓ ACCEPTED: Mask detected: '{pred_class}' (confidence: {confidence:.2f})")
+                    else:
+                        print(f"    -> Rejected (low confidence: {confidence:.2f})")
+                else:
+                    # If class name doesn't match known patterns, but confidence is reasonable, accept it
+                    # (in case the API uses different naming - be more lenient)
+                    if confidence > 0.4 and pred_class and "mask" in pred_class:
+                        mask_preds.append(pred)
+                        print(f"    -> ✓ ACCEPTED (contains 'mask'): '{pred_class}' (confidence: {confidence:.2f})")
+                    elif confidence > 0.5 and pred_class:
+                        # Accept any high confidence detection that's not "no_mask"
+                        mask_preds.append(pred)
+                        print(f"    -> ✓ ACCEPTED (high confidence): '{pred_class}' (confidence: {confidence:.2f})")
+                    else:
+                        print(f"    -> Unknown class: '{pred_class}' (confidence: {confidence:.2f})")
+        
+        print(f"Final mask count: {len(mask_preds)} masks detected")
+        
+        # If no masks found but we had predictions, log them for debugging
+        if len(mask_preds) == 0 and len(all_mask_preds) > 0:
+            print("WARNING: No masks accepted from predictions. All predictions:")
+            for idx, pred in enumerate(all_mask_preds):
+                print(f"  {idx}: {pred}")
         
         # Check for angry emotions
         angry_emotions = []
