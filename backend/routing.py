@@ -1,10 +1,6 @@
-from channels.routing import ProtocolTypeRouter, URLRouter
-from django.core.asgi import get_asgi_application
-import cameras.routing   # ✔ FIXED: this file now exists
+from django.urls import re_path
+from cameras.consumers import CameraConsumer
 
-application = ProtocolTypeRouter({
-    "http": get_asgi_application(),
-    "websocket": URLRouter(
-        cameras.routing.websocket_urlpatterns
-    ),
-})
+websocket_urlpatterns = [
+    re_path(r'ws/camera/$', CameraConsumer.as_asgi()),
+]
