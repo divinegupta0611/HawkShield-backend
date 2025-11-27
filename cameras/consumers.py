@@ -7,6 +7,7 @@ from channels.generic.websocket import AsyncWebsocketConsumer
 from pathlib import Path
 import asyncio
 from ultralytics import YOLO
+from datetime import datetime
 
 
 # Load YOLO models at startup
@@ -18,9 +19,8 @@ knife_model = YOLO(str(WEIGHTS_DIR / "knife_detector.pt"))
 
 print("✅ YOLOv11 Models loaded successfully!")
 
-face_mask_model.conf = 0.6  # confidence threshold
-
-knife_model.conf = 0.6  # confidence threshold
+face_mask_model.conf = 0.5  # confidence threshold
+knife_model.conf = 0.5  # confidence threshold
 
 
 class CameraConsumer(AsyncWebsocketConsumer):
@@ -83,8 +83,9 @@ class CameraConsumer(AsyncWebsocketConsumer):
             elif action == "video_frame":
                 # Process frame for detection
                 frame_data = data.get("frame")
+                camera_name = data.get("camera_name", "Unknown Camera")
                 if frame_data:
-                    await self.process_frame(frame_data)
+                    await self.process_frame(frame_data, camera_name)
 
             # ---------- Viewer joins ----------
             elif action == "viewer_join":
@@ -163,7 +164,7 @@ class CameraConsumer(AsyncWebsocketConsumer):
                 "message": str(e)
             }))
 
-    async def process_frame(self, frame_data):
+    async def process_frame(self, frame_data, camera_name):
         """Process video frame for object detection"""
         try:
             # Decode base64 image
@@ -178,12 +179,24 @@ class CameraConsumer(AsyncWebsocketConsumer):
             loop = asyncio.get_event_loop()
             detections = await loop.run_in_executor(None, self.detect_objects, frame)
             
-            # Send detections back to client
+            # Send detections back to streamer
             if detections:
                 await self.send(text_data=json.dumps({
                     "action": "detections",
                     "detections": detections
                 }))
+                
+                # Broadcast detections to all viewers in this camera group
+                await self.channel_layer.group_send(
+                    f"camera_{self.camera_id}",
+                    {
+                        "type": "broadcast_detections",
+                        "detections": detections,
+                        "camera_id": self.camera_id,
+                        "camera_name": camera_name,
+                        "timestamp": datetime.now().strftime("%H:%M:%S")
+                    }
+                )
                 
         except Exception as e:
             print(f"Error processing frame: {e}")
@@ -225,7 +238,6 @@ class CameraConsumer(AsyncWebsocketConsumer):
 
         return detections
 
-
     # Handler for viewer joined notification
     async def viewer_joined(self, event):
         # Only send to streamer
@@ -247,3 +259,15 @@ class CameraConsumer(AsyncWebsocketConsumer):
     # Handler for WebRTC messages
     async def webrtc_message(self, event):
         await self.send(text_data=json.dumps(event["message"]))
+
+    # Handler for broadcasting detections to viewers
+    async def broadcast_detections(self, event):
+        # Only send to viewers
+        if self.role == "viewer":
+            await self.send(text_data=json.dumps({
+                "action": "detections",
+                "detections": event["detections"],
+                "camera_id": event["camera_id"],
+                "camera_name": event["camera_name"],
+                "timestamp": event["timestamp"]
+            }))
