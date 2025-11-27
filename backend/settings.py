@@ -131,12 +131,12 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 username = quote_plus("guptadivine0611_db_user")
 password = quote_plus("BU@#8826613045")  # special characters will be escaped
 
-MONGO_URI = f"mongodb+srv://{username}:{password}@cameras.sqzabiw.mongodb.net/?appName=Cameras"
-client = MongoClient(MONGO_URI)
-MONGO_DB = client["hawkshield"]
-CAMERA_COLLECTION = MONGO_DB["cameras"]
-LOGS_COLLECTION = MONGO_DB["logs"]
-FRAMES_COLLECTION = MONGO_DB["frames"]
+# MONGO_URI = f"mongodb+srv://{username}:{password}@cameras.sqzabiw.mongodb.net/?appName=Cameras"
+# client = MongoClient(MONGO_URI)
+# MONGO_DB = client["hawkshield"]
+# CAMERA_COLLECTION = MONGO_DB["cameras"]
+# LOGS_COLLECTION = MONGO_DB["logs"]
+# FRAMES_COLLECTION = MONGO_DB["frames"]
 
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
