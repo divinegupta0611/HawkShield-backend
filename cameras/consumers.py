@@ -13,14 +13,28 @@ from datetime import datetime
 # Load YOLO models at startup
 BASE_DIR = Path(__file__).resolve().parent.parent
 WEIGHTS_DIR = BASE_DIR / "cameras" / "weights"
+
 # Load models
 face_mask_model = YOLO(str(WEIGHTS_DIR / "face_mask_best.pt"))
-knife_model = YOLO(str(WEIGHTS_DIR / "knife_detector.pt"))
+weapon_model = YOLO(str(WEIGHTS_DIR / "knife_detector.pt"))
 
 print("✅ YOLOv11 Models loaded successfully!")
 
-face_mask_model.conf = 0.5  # confidence threshold
-knife_model.conf = 0.5  # confidence threshold
+# Set different confidence thresholds per detection type
+CONFIDENCE_THRESHOLDS = {
+    "face_mask": 0.5,
+    "gun": 0.6,      # Higher threshold to reduce false positives
+    "knife": 0.55,   # Slightly higher
+    "blood": 0.7,    # Much higher to prevent false blood detections
+}
+
+# Default model confidence (will be overridden per class)
+face_mask_model.conf = 0.5
+weapon_model.conf = 0.5
+
+# Print model class names for debugging
+print(f"Face Mask Model Classes: {face_mask_model.names}")
+print(f"Weapon Model Classes: {weapon_model.names}")
 
 
 class CameraConsumer(AsyncWebsocketConsumer):
@@ -204,39 +218,102 @@ class CameraConsumer(AsyncWebsocketConsumer):
             traceback.print_exc()
 
     def detect_objects(self, frame):
+        """Run both models and collect all detections"""
         detections = []
 
         # ----- FACE MASK DETECTION -----
-        mask_results = face_mask_model(frame)[0]
-        for box in mask_results.boxes:
-            x1, y1, x2, y2 = map(int, box.xyxy[0])
-            conf = float(box.conf[0])
-            cls = int(box.cls[0])
-            class_name = face_mask_model.names[cls]
+        try:
+            mask_results = face_mask_model(frame, verbose=False)[0]
+            for box in mask_results.boxes:
+                x1, y1, x2, y2 = map(int, box.xyxy[0])
+                conf = float(box.conf[0])
+                cls = int(box.cls[0])
+                class_name = face_mask_model.names[cls]
 
-            detections.append({
-                "type": "face_mask",
-                "class": class_name,
-                "confidence": conf,
-                "bbox": [x1, y1, x2, y2]
-            })
+                # Apply threshold
+                if conf >= CONFIDENCE_THRESHOLDS["face_mask"]:
+                    detections.append({
+                        "type": "face_mask",
+                        "class": class_name,
+                        "confidence": round(conf, 3),
+                        "bbox": [x1, y1, x2, y2],
+                        "severity": self.get_severity("face_mask", class_name)
+                    })
+        except Exception as e:
+            print(f"Error in face mask detection: {e}")
 
-        # ----- KNIFE DETECTION -----
-        knife_results = knife_model(frame)[0]
-        for box in knife_results.boxes:
-            x1, y1, x2, y2 = map(int, box.xyxy[0])
-            conf = float(box.conf[0])
-            cls = int(box.cls[0])
-            class_name = knife_model.names[cls]
+        # ----- WEAPON & BLOOD DETECTION -----
+        try:
+            # Run detection with lower base confidence to catch more objects
+            weapon_results = weapon_model(frame, conf=0.4, verbose=False)[0]
+            
+            for box in weapon_results.boxes:
+                x1, y1, x2, y2 = map(int, box.xyxy[0])
+                conf = float(box.conf[0])
+                cls = int(box.cls[0])
+                class_name = weapon_model.names[cls]
 
-            detections.append({
-                "type": "knife",
-                "class": class_name,
-                "confidence": conf,
-                "bbox": [x1, y1, x2, y2]
-            })
+                # Determine detection type
+                detection_type = self.classify_detection(class_name)
+                
+                # Apply class-specific threshold
+                threshold = CONFIDENCE_THRESHOLDS.get(detection_type, 0.5)
+                
+                # Debug logging
+                print(f"Detected: {class_name} ({detection_type}) - Confidence: {conf:.3f} - Threshold: {threshold}")
+                
+                # Only include if meets threshold
+                if conf >= threshold:
+                    detections.append({
+                        "type": detection_type,
+                        "class": class_name,
+                        "confidence": round(conf, 3),
+                        "bbox": [x1, y1, x2, y2],
+                        "severity": self.get_severity(detection_type, class_name)
+                    })
+                else:
+                    print(f"  ❌ Filtered out (below threshold)")
+                    
+        except Exception as e:
+            print(f"Error in weapon/blood detection: {e}")
+            import traceback
+            traceback.print_exc()
 
         return detections
+
+    def classify_detection(self, class_name):
+        """Classify detection type based on class name"""
+        class_name_lower = class_name.lower()
+        
+        # More comprehensive matching
+        if any(keyword in class_name_lower for keyword in ['gun', 'pistol', 'firearm', 'rifle', 'weapon']):
+            return "gun"
+        elif any(keyword in class_name_lower for keyword in ['knife', 'blade', 'dagger', 'machete']):
+            return "knife"
+        elif 'blood' in class_name_lower:
+            return "blood"
+        else:
+            # If no match, print for debugging
+            print(f"⚠️ Unknown class name: {class_name}")
+            return "weapon"
+
+    def get_severity(self, detection_type, class_name):
+        """Assign severity level to detections"""
+        # Critical severity for weapons and blood
+        if detection_type == "gun":
+            return "critical"
+        elif detection_type == "knife":
+            return "high"
+        elif detection_type == "blood":
+            return "high"
+        # Medium severity for no mask
+        elif detection_type == "face_mask" and any(word in class_name.lower() for word in ["without", "no", "not"]):
+            return "medium"
+        # Low severity for with mask
+        elif detection_type == "face_mask" and any(word in class_name.lower() for word in ["with", "mask"]):
+            return "low"
+        else:
+            return "medium"
 
     # Handler for viewer joined notification
     async def viewer_joined(self, event):
